@@ -1,0 +1,165 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var adm1 = ee.FeatureCollection("projects/supple-hulling-447406-g1/assets/ken_adm1"),
+    admn1 = ee.FeatureCollection("FAO/GAUL_SIMPLIFIED_500m/2015/level1"),
+    admn2 = ee.FeatureCollection("FAO/GAUL_SIMPLIFIED_500m/2015/level2"),
+    worldcover = ee.ImageCollection("ESA/WorldCover/v200");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// Map.addLayer(adm1)
+// Map.centerObject(adm1, 5)
+
+// var ROI = adm1.filter(ee.Filter.eq('ADM1_EN', 'Kiambu'));
+// Map.addLayer(ROI, {}, 'Kiambu')
+// Map.centerObject(ROI, 9)
+
+// view attribute table
+// print(adm1.limit(5))
+// print(adm1.first());
+var columns = adm1.first().propertyNames();
+print(columns);
+
+
+
+// var kiambu = adm1.filter(ee.Filter.eq('ADM1_EN', 'Kiambu'));
+// print(kiambu.size());
+
+// Map.addLayer(admn2)
+
+// get kiambu and thika districts from fao gaul dataset
+var province = 'Central'
+var district = 'Thika'
+var district2 = 'Kiambu'
+
+var roi = admn2
+  .filter(ee.Filter.eq('ADM1_NAME', province))
+  .filter(ee.Filter.inList('ADM2_NAME', [district, district2]))
+  // .filter(ee.Filter.eq('ADM2_NAME', district2));
+// Map.addLayer(roi, {}, 'roi')  
+
+// join the two distrcts
+var geometry = roi.geometry()
+Map.addLayer(geometry, {}, 'geometry')
+Map.centerObject(geometry)
+
+print(worldcover)
+// filtered to the image date
+var filtered = worldcover.filter(ee.Filter.date('2021-01-01', '2022-01-01'));
+print(filtered)
+// get the image from the collection
+var classification = ee.Image(filtered.first())
+print(classification)
+
+var className = classification.get('Map_class_names');
+var classValue = classification.get('Map_class_values');
+var classValue = ee.List(classValue).map(function(item){
+  return ee.Number(item).format()
+})
+print (className);
+print (classValue);
+
+// convert dictionary to list 
+var classDict = ee.Dictionary.fromLists(classValue, className);
+print(classDict)
+
+// clip to geometry
+var clipped = classification.clip(geometry)
+/*
+Filter.bounds : work only for ImageCollection and featureCollection.
+                Done when acquiring the satellite imagery
+Clip: works with image
+      Done last after image is genearated
+*/
+// var clipped = classification.filter(ee.Filter.bounds(geometry))
+Map.addLayer(clipped)  
+
+/*
+.eq- apply to pixels of an image
+.Filter.eq - apply to a collection
+selfMask - displays only pixels with values greater than 0. 
+Used when want to visualize a specific class of features only with the base map
+*/
+var water = classification.eq(80);
+// Map.addLayer(water.selfMask(), {min:0, max:1, palette:['white','blue']}, 'Water');
+
+var vector = water.selfMask().reduceToVectors({
+  geometry: geometry,
+  scale: 10,
+  eightConnected: false,
+  maxPixels: 1e10
+})
+// Map.addLayer(vector, {}, 'Water_Vectors')
+
+// computing area of each landcover class
+/* adding the area image: creates an image where each pixel’s value is the area of 
+the pixel */
+var areaImage = ee.Image.pixelArea().addBands(classification);
+print (areaImage)
+
+/*grouped reducer : compute statics in a region
+output : is dictionaries nested in a dictonary with name group.
+*/
+var areas = areaImage.reduceRegion({
+  // computes the (weighted) sum of its inputs
+  reducer: ee.Reducer.sum().group({
+    groupField: 1,
+    groupName: 'class'
+  }), 
+  geometry: geometry, 
+  scale: 10,
+  maxPixels:1e10
+})
+print(areas)  
+
+/*extract the individual class areas and convert it to a single dictionary
+output: nested list, list in a list
+Then pass it to a list for some list operations
+*/
+var areaValues = ee.List(areas.get('groups'));
+print(areaValues);
+
+/*iterate through each item in the list and get the area and class*/
+var areaList = areaValues.map(function(item){
+  // cast to dictionary
+  var areaDict = ee.Dictionary(item)
+  // extract class number and convert to string
+  var classNumber = ee.Number(areaDict.get('class')).format()
+  // get the area for each class
+  var area = ee.Number(areaDict.get('sum')).divide(1e6).round();
+  return ee.List([classDict.get(classNumber), area])
+});
+print(areaList)
+
+// flattening the list 
+var results = ee.Dictionary(areaList.flatten())
+print(results)
+
+// export the image
+// 1. raw uncolored: good for further analysis
+Export.image.toDrive({
+  image: clipped, 
+  description : 'Kiambu_ESA_Raw_Export', 
+  folder: 'GEE', 
+  fileNamePrefix: 'Kiambu_ESA_Raw_Export', 
+  region: geometry, 
+  scale: 10, 
+  maxPixels: 1e10, 
+}) 
+
+// 2. colored: good for sharing 
+Export.image.toDrive({
+  image: clipped.visualize(),
+  description: 'Kiambu_ESA_colored',
+  folder: 'GEE',
+  fileNamePrefix: 'Kiambu_ESA_Colored',
+  region: geometry,
+  scale: 10, 
+  maxPixels: 1e10
+})
+
+// export vector
+Export.table.toDrive({
+  collection: vector,
+  description: 'Water_Polygon',
+  folder: 'GEE',
+  fileNamePrefix: 'Water_Polygon',
+  fileFormat: 'SHP'
+})
