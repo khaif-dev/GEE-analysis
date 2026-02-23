@@ -1,0 +1,86 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var geometry = /* color: #d61412 */ee.Geometry.Polygon(
+        [[[35.246645821962396, 0.5398834684053004],
+          [35.24682244085063, 0.5386711282551591],
+          [35.24728378080119, 0.5365039987658916],
+          [35.24808844350566, 0.5388427820432004],
+          [35.24889399032055, 0.5410566056345504],
+          [35.249366059107174, 0.5425800322357132],
+          [35.246844782633175, 0.5420972562416054],
+          [35.24693061332165, 0.5413033578565011],
+          [35.24649073104321, 0.5412282593552402]]]),
+    s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// Map.addLayer(geometry)
+Map.centerObject(geometry)
+
+// getting the images
+var dataset = s2
+  .filter(ee.Filter.date('2025-01-01','2026-01-01'))
+  .filter(ee.Filter.bounds(geometry));
+
+
+var csPlus = ee.ImageCollection('GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED');
+var csPlusBands = csPlus.first().bandNames();
+
+// Adding Cloud Score + bands to each Sentinel-2 image in the collection
+var datasetWithCs = dataset.linkCollection(csPlus, csPlusBands);
+
+// Function to mask pixels with low CS+ QA scores.
+var maskLowQA = function(image) {
+  var qaBand = 'cs';
+  var clearThreshold = 0.5;
+  var mask = image.select(qaBand).gte(clearThreshold);
+  return image.updateMask(mask);
+};
+
+// map() the function to mask all images
+var datasetMasked = datasetWithCs
+  .map(maskLowQA)
+  .select('B.*');
+
+// Function to scale pixel values to reflectance
+var scaleValues = function(image) {
+  var scaledImage = image.multiply(0.0001);
+  // This creates a new image and we lose the properties
+  // copy the system:time_start property 
+  // from the originalimage
+  return scaledImage
+    .copyProperties(image, ['system:time_start']);
+};
+
+// function to compute ndvi
+var addNdvi = function(image){
+  var ndvi = image.normalizedDifference(['B8','B4']).rename('NDVI')
+  return image.addBands(ndvi);
+};
+
+// applying the functions
+var withNdvi = datasetMasked
+  .map(scaleValues)
+  .map(addNdvi)
+  
+print(withNdvi)
+
+var chart = ui.Chart.image.series({
+  imageCollection: withNdvi.select('NDVI'),
+  region: geometry,
+  reducer: ee.Reducer.mean(),
+  scale: 10
+}).setOptions({
+      lineWidth: 1,
+      pointSize: 1,
+      title: 'NDVI Time Series',
+      interpolateNulls: true,
+      vAxis: {title: 'NDVI'},
+      hAxis: {title: '', format: 'YYYY-MMM'}
+    });
+
+print(chart)
+// var visParams = {
+//   min: 0,
+//   max: 3000,
+//   bands: ['B4','B3','B2']
+// }  
+
+// Map.addLayer(datasetMasked, visParams, 'RGB_Image')
