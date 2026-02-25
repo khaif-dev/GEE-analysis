@@ -1,0 +1,63 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var chirps = ee.ImageCollection("UCSB-CHC/CHIRPS/V3/PENTAD"),
+    adm1 = ee.FeatureCollection("projects/supple-hulling-447406-g1/assets/ken_adm1");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// getting ROI
+var ROI = adm1.filter(ee.Filter.eq('ADM1_EN', 'Nyeri'))
+
+// function to compute avg rainfall for one year
+var calculateRainfall = function(year){
+  // defining the time period
+  var startDate = ee.Date.fromYMD(year, 1, 1);
+  var endDate = startDate.advance(1, 'year')
+
+  // filter dataset to date
+  var filtered = chirps
+    .filter(ee.Filter.date(startDate, endDate))
+
+  //computing total rainfall
+  var totalRainfall = filtered.reduce(ee.Reducer.sum())
+
+  // compute annual mean rainfall for ROI
+  var meanRainfall = totalRainfall.reduceRegion(
+    {reducer: ee.Reducer.mean(), 
+    geometry: ROI.geometry(),
+    scale: 5566,
+  })
+  
+  var result = meanRainfall.getNumber('precipitation_sum')
+  return ee.Feature(null, {
+    'total': result,
+    'year': year
+  });
+}
+
+// compute avarage rainfall for 2000 to 2025 using map
+var years = ee.List.sequence(2000, 2025)
+var annualRainfall = years.map(calculateRainfall)
+print(annualRainfall)
+
+// exporting data as a csv
+// convert to feature collection
+var fc = ee.FeatureCollection(annualRainfall)
+print(fc)
+
+// export rto drive
+Export.table.toDrive({
+  collection: fc,
+  description: 'Nyeri_mean_annual_rainfall',
+  folder: 'GEE',
+  fileNamePrefix: 'Nyeri_mean_annual_rainfall',
+  fileFormat: 'CSV',
+})
+
+
+// var visParams = {
+//   min: 0,
+//   max: 1000,
+//   palette: ['#eff3ff','#bdd7e7','#6baed6','#3182bd','#08519c']
+// }
+
+// Map.addLayer(totalRainfall, visParams, 'Total Rainfall' )
+// Map.addLayer(ROI, {color:'red'}, 'Nyeri')
+// Map.centerObject(ROI)  
